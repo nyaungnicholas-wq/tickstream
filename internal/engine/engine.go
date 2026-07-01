@@ -12,8 +12,10 @@ import (
 
 	"github.com/nyaungnicholas-wq/tickstream/internal/book"
 	"github.com/nyaungnicholas-wq/tickstream/internal/checksum"
+	"github.com/nyaungnicholas-wq/tickstream/internal/consolidate"
 	"github.com/nyaungnicholas-wq/tickstream/internal/metrics"
 	"github.com/nyaungnicholas-wq/tickstream/internal/model"
+	"github.com/nyaungnicholas-wq/tickstream/internal/signals"
 	"github.com/nyaungnicholas-wq/tickstream/internal/snapshot"
 )
 
@@ -145,12 +147,12 @@ func (e *Engine) triggerResync(v model.Venue, bk *book.Book) {
 	}
 }
 
-// publish builds a FRESH immutable Snapshot and stores it.
+// publish builds a FRESH immutable Snapshot — per-venue tops, consolidated
+// BBO, and live signals — and stores it.
 //
 // §4.3 discipline: the Venues map is freshly allocated every publish, and the
 // VenueTop/Level contents are copied by value out of the books — the snapshot
 // shares no backing storage with engine state or with any previous snapshot.
-// M3 fills only the per-venue tops; consolidation + signals land in M4.
 func (e *Engine) publish(ev model.Event) {
 	venues := make(map[model.Venue]model.VenueTop, len(e.books))
 	for v, bk := range e.books {
@@ -163,9 +165,26 @@ func (e *Engine) publish(ev model.Event) {
 		}
 		venues[v] = vt
 	}
+
+	bbo := consolidate.Consolidate(venues)
 	s := &model.Snapshot{
-		Venues:           venues,
-		PublishUnixNanos: time.Now().UnixNano(),
+		Venues:            venues,
+		Consolidated:      bbo,
+		CrossVenueCrossed: bbo.CrossVenueCrossed,
+		PublishUnixNanos:  time.Now().UnixNano(),
+	}
+	if bbo.Valid {
+		// The fixed-point book converts to float64 only here, at the
+		// signal layer (spec §8).
+		pb, pa := bbo.BestBidPrice.Float64(), bbo.BestAskPrice.Float64()
+		qb, qa := bbo.BestBidSize.Float64(), bbo.BestAskSize.Float64()
+		s.ImbalanceSigned, s.ImbalanceFraction = signals.Imbalance(qb, qa)
+		s.WeightedMid = signals.WeightedMid(pb, pa, qb, qa)
+		s.Mid = signals.Mid(pb, pa)
+		s.SpreadTicks = bbo.Spread
+		if bbo.CrossVenueCrossed {
+			metrics.CrossVenueCrosses.Add(1)
+		}
 	}
 	if !ev.Received.IsZero() {
 		// time.Since uses the monotonic reading stamped by the feed just

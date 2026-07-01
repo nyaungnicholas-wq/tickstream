@@ -20,4 +20,8 @@ var (
 	ChecksumSkippedThin atomic.Int64
 	// Reconnects counts websocket session re-establishments.
 	Reconnects atomic.Int64
+	// CrossVenueCrosses counts publishes where the consolidated book was
+	// locked/crossed ACROSS venues — normal and transient (no SIP in
+	// crypto), flagged but never resynced (spec §7).
+	CrossVenueCrosses atomic.Int64
 )

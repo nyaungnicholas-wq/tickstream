@@ -25,7 +25,7 @@ import (
 	"github.com/nyaungnicholas-wq/tickstream/internal/snapshot"
 )
 
-const version = "0.3.0-m3"
+const version = "0.4.0-m4"
 
 // engineChanCap bounds the feed→engine hand-off (spec §4.4). A full buffer is
 // a DEFINED failure mode — the feeds drop + count + resync, never block their
@@ -124,32 +124,34 @@ func main() {
 		metrics.Reconnects.Load())
 }
 
+// printStatus renders the consolidated NBBO view (M4). Reads are one atomic
+// Load plus field reads — the wait-free path.
 func printStatus(s *model.Snapshot) {
 	if s == nil {
 		fmt.Println("waiting for first snapshot…")
 		return
 	}
-	var b strings.Builder
-	for _, v := range []model.Venue{model.Coinbase, model.Kraken} {
-		vt, ok := s.Venues[v]
-		if !ok {
-			continue
-		}
-		tag := "CB"
-		if v == model.Kraken {
-			tag = "KR"
-		}
-		switch {
-		case !vt.Ready:
-			fmt.Fprintf(&b, "[%s] resyncing…   ", tag)
-		case vt.HasBid && vt.HasAsk:
-			fmt.Fprintf(&b, "[%s] bid=%s (%s) ask=%s (%s)   ", tag,
-				vt.BestBid.Price, vt.BestBid.Qty, vt.BestAsk.Price, vt.BestAsk.Qty)
-		default:
-			fmt.Fprintf(&b, "[%s] one-sided book   ", tag)
-		}
+	c := s.Consolidated
+	if !c.Valid {
+		fmt.Println("no quoting venue yet (books resyncing)…")
+		return
 	}
-	fmt.Fprintf(&b, "applyLat=%s drops=%d resyncs=%d",
+	var b strings.Builder
+	fmt.Fprintf(&b, "NBBO bid=%s@%s ask=%s@%s mid=%.2f wmid=%.2f imb=%+.3f spread=%s",
+		c.BestBidPrice, venueTag(c.BestBidVenue),
+		c.BestAskPrice, venueTag(c.BestAskVenue),
+		s.Mid, s.WeightedMid, s.ImbalanceSigned, c.Spread)
+	if s.CrossVenueCrossed {
+		b.WriteString("  [XVENUE-CROSSED]")
+	}
+	fmt.Fprintf(&b, "  applyLat=%s drops=%d resyncs=%d",
 		time.Duration(s.ApplyLatencyNanos), metrics.DroppedEvents.Load(), metrics.Resyncs.Load())
 	fmt.Println(b.String())
+}
+
+func venueTag(v model.Venue) string {
+	if v == model.Kraken {
+		return "KR"
+	}
+	return "CB"
 }
