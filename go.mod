@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/bytedance/sonic v1.15.2
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/coder/websocket v1.8.15
 )
 

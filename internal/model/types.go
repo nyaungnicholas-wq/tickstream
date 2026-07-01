@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Side is the side of the book a level belongs to.
@@ -209,6 +210,13 @@ type Event struct {
 	Bids, Asks     []Level
 	Checksum       uint32 // Kraken only; 0 otherwise
 	EventTimeNanos int64  // venue event time if provided, else 0
+	// Received is the monotonic event-received timestamp, stamped by the
+	// feed goroutine just after the websocket read returns (spec §9.1: the
+	// apply-latency headline starts HERE, so queueing on the bounded
+	// hand-off channel is included). Zero for fixture-driven tests.
+	// Stored as time.Time because Go's monotonic reading only survives
+	// inside a time.Time; time.Since(Received) is NTP-step-immune.
+	Received time.Time
 }
 
 // VenueTop is one venue's top-of-book as published in a Snapshot.
