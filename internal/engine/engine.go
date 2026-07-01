@@ -163,6 +163,11 @@ func (e *Engine) publish(ev model.Event) {
 		if lv, ok := bk.BestAsk(); ok {
 			vt.HasAsk, vt.BestAsk = true, lv
 		}
+		if vt.Ready {
+			// Ladder depth for readers; TopN returns fresh slices (§4.3).
+			vt.Bids = bk.TopN(model.Bid, checksumDepth)
+			vt.Asks = bk.TopN(model.Ask, checksumDepth)
+		}
 		venues[v] = vt
 	}
 

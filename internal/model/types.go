@@ -220,11 +220,15 @@ type Event struct {
 }
 
 // VenueTop is one venue's top-of-book as published in a Snapshot.
+// Bids/Asks carry the top-N depth (best-first) for readers that render
+// ladders; like everything in a Snapshot they are FRESH slices per publish
+// (§4.3) — TopN already returns fresh backing storage.
 type VenueTop struct {
 	Venue            Venue
 	Ready            bool
 	HasBid, HasAsk   bool
 	BestBid, BestAsk Level
+	Bids, Asks       []Level
 }
 
 // ConsolidatedBBO is the cross-venue best bid/offer (crypto "NBBO").

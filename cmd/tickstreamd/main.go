@@ -20,6 +20,7 @@ import (
 	"github.com/nyaungnicholas-wq/tickstream/internal/feed"
 	"github.com/nyaungnicholas-wq/tickstream/internal/feed/coinbase"
 	"github.com/nyaungnicholas-wq/tickstream/internal/feed/kraken"
+	"github.com/nyaungnicholas-wq/tickstream/internal/httpapi"
 	"github.com/nyaungnicholas-wq/tickstream/internal/metrics"
 	"github.com/nyaungnicholas-wq/tickstream/internal/model"
 	"github.com/nyaungnicholas-wq/tickstream/internal/snapshot"
@@ -38,6 +39,7 @@ func main() {
 		cbSymbol    = flag.String("coinbase-symbol", "BTC-USD", "Coinbase Exchange product id")
 		krSymbol    = flag.String("kraken-symbol", "BTC/USD", "Kraken v2 symbol")
 		depth       = flag.Int("depth", 10, "Kraken book depth (10|25|100|500|1000)")
+		httpAddr    = flag.String("http", "127.0.0.1:8321", "dashboard listen address (empty disables)")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -98,6 +100,17 @@ func main() {
 		defer wg.Done()
 		eng.Run(ctx, events)
 	}()
+
+	// A reader: the local dashboard (HTML + JSON snapshot endpoint).
+	if *httpAddr != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := httpapi.Serve(ctx, *httpAddr, pub); err != nil {
+				slog.Error("dashboard server exited", "err", err)
+			}
+		}()
+	}
 
 	// A reader: 1s status line off the wait-free snapshot load.
 	wg.Add(1)
