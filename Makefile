@@ -21,6 +21,9 @@ test: ## unit tests with the race detector
 bench: ## micro-benchmarks (NEVER with -race; race timings are garbage)
 	$(GO) test -run=^$$ -bench=. -benchmem -count=10 ./...
 
+bench-e2e: ## the honest apply-latency harness (headline metric)
+	$(GO) run ./cmd/tickstream-bench
+
 build: ## build the daemon
 	$(GO) build -o $(BINDIR)/tickstreamd ./cmd/tickstreamd
 

@@ -25,7 +25,7 @@ import (
 	"github.com/nyaungnicholas-wq/tickstream/internal/snapshot"
 )
 
-const version = "0.4.0-m4"
+const version = "0.5.0"
 
 // engineChanCap bounds the feed→engine hand-off (spec §4.4). A full buffer is
 // a DEFINED failure mode — the feeds drop + count + resync, never block their
