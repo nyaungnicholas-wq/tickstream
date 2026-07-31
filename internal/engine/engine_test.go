@@ -176,11 +176,16 @@ func TestApplyLatencyStamped(t *testing.T) {
 		Venue: model.Kraken, Kind: model.KindSnapshot,
 		Bids: bids, Asks: asks,
 		Checksum: krakenChecksumFor(bids, asks),
-		Received: time.Now(),
+		// Backdated by a known amount rather than time.Now(): Apply is fast
+		// enough to finish inside a single clock tick, and on a coarse
+		// monotonic clock (Windows) time.Since then legitimately returns 0,
+		// which is indistinguishable from "never stamped". Backdating keeps
+		// the assertion about the contract, not the host's timer resolution.
+		Received: time.Now().Add(-2 * time.Millisecond),
 	})
 	s := pub.Load()
-	if s.ApplyLatencyNanos <= 0 {
-		t.Fatalf("ApplyLatencyNanos = %d, want > 0 when Received is stamped", s.ApplyLatencyNanos)
+	if s.ApplyLatencyNanos < int64(2*time.Millisecond) {
+		t.Fatalf("ApplyLatencyNanos = %d, want >= 2ms when Received is stamped 2ms ago", s.ApplyLatencyNanos)
 	}
 	if s.PublishUnixNanos == 0 {
 		t.Fatal("PublishUnixNanos not stamped")
