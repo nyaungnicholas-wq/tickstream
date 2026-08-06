@@ -150,6 +150,34 @@ book VWAP, not a fair-value estimator).
   arbitrage inside the fee band. The opposite holds **within** one venue,
   where a crossed book means *our* book is corrupt ⇒ resync.
 
+## Execution-cost study (TCA)
+
+What does it actually cost to fill a market order, and does routing across
+venues or slicing over time make it cheaper? This is the question the
+"too small to arbitrage inside the fee band" observation above raises, answered
+with measurement instead of a simulator.
+
+Three arms are priced against a recorded tape: **naive** (whole order, one
+venue), **routed** (whole order, both venues' real depth), **sliced** (TWAP).
+The design constraint is that a tape can never show how the book would have
+reacted to *your* order — so rather than invent an impact coefficient, the
+sliced arm is reported as a **band between two bounds that are both pure
+measurement**, and the book-resilience number says where inside it reality
+sits. Slippage is also decomposed into execution cost and price drift, because
+over a few minutes drift otherwise dominates the comparison entirely.
+
+Every figure is a **lower bound**: displayed depth omits hidden and iceberg
+size, and makers pull quotes when they see aggression.
+
+```bash
+pwsh -File scripts/capture.ps1 -Dir C:\tickstream-capture -Depth 1000  # record
+go run ./cmd/tapestat  -dir C:\tickstream-capture                      # tape integrity
+go run ./cmd/tcastudy  -dir C:\tickstream-capture -out tca.csv         # the study
+python scripts/analyze_tca.py tca.csv                                  # chart it
+```
+
+Method, caveats, fee provenance and results: **[docs/TCA.md](docs/TCA.md)**.
+
 ## Performance / benchmarks
 
 Methodology first, numbers second — that order is the point.
