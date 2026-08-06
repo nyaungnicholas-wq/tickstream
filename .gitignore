@@ -1,3 +1,11 @@
 /bin/
 latency.csv
 latency.png
+
+# Execution-cost study output (cmd/tcastudy defaults to ./tca.csv).
+tca.csv
+tca.png
+
+# Recorded tapes. These are large and are captured outside the repo by
+# scripts/capture.ps1; this only guards against a stray -capture-dir .
+*.gob.gz
