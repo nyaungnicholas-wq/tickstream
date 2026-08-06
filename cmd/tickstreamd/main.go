@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nyaungnicholas-wq/tickstream/internal/capture"
 	"github.com/nyaungnicholas-wq/tickstream/internal/engine"
 	"github.com/nyaungnicholas-wq/tickstream/internal/feed"
 	"github.com/nyaungnicholas-wq/tickstream/internal/feed/coinbase"
@@ -40,6 +41,7 @@ func main() {
 		krSymbol    = flag.String("kraken-symbol", "BTC/USD", "Kraken v2 symbol")
 		depth       = flag.Int("depth", 10, "Kraken book depth (10|25|100|500|1000)")
 		httpAddr    = flag.String("http", "127.0.0.1:8321", "dashboard listen address (empty disables)")
+		captureDir  = flag.String("capture-dir", "", "record the raw event tape to this directory (empty disables)")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -77,8 +79,45 @@ func main() {
 		resyncFns[f.Venue()] = f.RequestResync
 	}
 
+	// Optional tape recorder. The execution-cost study replays this, so the
+	// depth the tape was recorded at is the hard ceiling on the order size it
+	// can ever answer for — a depth-10 BTC book is a couple of BTC. Refuse to
+	// start a long capture at the default depth rather than discover two weeks
+	// later that the tape is too thin to measure anything.
+	var symbols = map[string]string{}
+	for _, f := range feeds {
+		switch f.Venue() {
+		case model.Coinbase:
+			symbols[model.Coinbase.String()] = *cbSymbol
+		case model.Kraken:
+			symbols[model.Kraken.String()] = *krSymbol
+		}
+	}
+	var rec *capture.Writer
+	var engOpts []engine.Option
+	if *captureDir != "" {
+		if *depth < 100 {
+			fmt.Fprintf(os.Stderr, "refusing to capture at -depth %d: the tape caps the order size the study can price; use -depth 500 or 1000\n", *depth)
+			os.Exit(2)
+		}
+		venueNames := make([]string, 0, len(venues))
+		for _, v := range venues {
+			venueNames = append(venueNames, v.String())
+		}
+		w, err := capture.NewWriter(capture.Config{
+			Dir: *captureDir, Venues: venueNames, Symbols: symbols, Depth: *depth,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "capture: %v\n", err)
+			os.Exit(1)
+		}
+		rec = w
+		engOpts = append(engOpts, engine.WithSink(w.Offer))
+		fmt.Printf("capturing to %s (depth %d)\n", *captureDir, *depth)
+	}
+
 	pub := &snapshot.Publisher{}
-	eng := engine.New(pub, venues, resyncFns, *depth)
+	eng := engine.New(pub, venues, resyncFns, *depth, engOpts...)
 	events := make(chan model.Event, engineChanCap)
 
 	var wg sync.WaitGroup
@@ -131,6 +170,15 @@ func main() {
 	<-ctx.Done()
 	fmt.Println("\nshutting down…")
 	wg.Wait()
+	// Close the recorder only after the single writer has stopped calling
+	// Offer, so the tail of the tape is not lost to a race with shutdown.
+	if rec != nil {
+		st := rec.Stats()
+		if err := rec.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "capture close: %v\n", err)
+		}
+		fmt.Printf("capture: written=%d dropped=%d files=%d\n", st.Written, st.Dropped, st.Files)
+	}
 	fmt.Printf("done. drops=%d resyncs=%d checksum_mismatches=%d thin_skips=%d reconnects=%d\n",
 		metrics.DroppedEvents.Load(), metrics.Resyncs.Load(),
 		metrics.ChecksumMismatches.Load(), metrics.ChecksumSkippedThin.Load(),
