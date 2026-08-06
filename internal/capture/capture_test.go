@@ -129,8 +129,13 @@ func onlyRun(t *testing.T, dir string) RunInfo {
 func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	want := makeEvents(t, 200)
-	writeAll(t, Config{Dir: dir, Venues: []string{"coinbase", "kraken"},
-		Symbols: map[string]string{"coinbase": "BTC-USD"}, Depth: 1000}, want)
+	cfg := Config{
+		Dir:     dir,
+		Venues:  []string{"coinbase", "kraken"},
+		Symbols: map[string]string{"coinbase": "BTC-USD"},
+		Depth:   1000,
+	}
+	writeAll(t, cfg, want)
 
 	run := onlyRun(t, dir)
 	var got []model.Event
@@ -274,8 +279,8 @@ func TestGapRecorded(t *testing.T) {
 		w.Offer(ev)
 	}
 	st := w.Stats()
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if cerr := w.Close(); cerr != nil {
+		t.Fatalf("Close: %v", cerr)
 	}
 	if st.Dropped == 0 {
 		t.Skip("no drops occurred; drain kept up with a BufSize of 1")
@@ -339,8 +344,8 @@ func TestTruncatedTailTolerated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if err := os.Truncate(last, fi.Size()-40); err != nil {
-		t.Fatalf("truncate: %v", err)
+	if terr := os.Truncate(last, fi.Size()-40); terr != nil {
+		t.Fatalf("truncate: %v", terr)
 	}
 
 	rep, err := ReplayRun(dir, run.RunID, func(Record) error { return nil })

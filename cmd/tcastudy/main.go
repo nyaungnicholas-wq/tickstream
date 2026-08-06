@@ -496,14 +496,19 @@ func med(rs []row, pick func(row) (float64, bool)) string {
 	return strconv.FormatFloat(v[len(v)/2], 'f', 2, 64)
 }
 
-func writeCSV(path string, rows []row) error {
+func writeCSV(path string, rows []row) (err error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// A failed close on a file we just wrote can mean truncated output, so it
+	// is reported rather than discarded — unless something worse came first.
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 	w := csv.NewWriter(f)
-	defer w.Flush()
 	if err := w.Write([]string{
 		"at", "size_btc", "touch_px", "displayed_depth_btc",
 		"naive_bps", "naive_fee_bps", "routed_bps", "routed_fee_bps",
@@ -523,6 +528,9 @@ func writeCSV(path string, rows []row) error {
 			return err
 		}
 	}
+	// Flush explicitly, not via defer: a deferred flush runs AFTER the return
+	// value is evaluated, so a failure on the last write would be lost.
+	w.Flush()
 	return w.Error()
 }
 

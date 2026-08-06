@@ -225,8 +225,10 @@ func (w *Writer) openFile() error {
 		Depth:   w.cfg.Depth,
 	}
 	if err := enc.Encode(hdr); err != nil {
-		gzw.Close()
-		f.Close()
+		// Cleanup on an already-failing path: the header error is the one
+		// worth reporting, so these are deliberately discarded.
+		_ = gzw.Close()
+		_ = f.Close()
 		return fmt.Errorf("capture: encode header: %w", err)
 	}
 
@@ -316,7 +318,12 @@ func (w *Writer) writeEvent(ev model.Event) {
 func (w *Writer) writeFinalGap() {
 	dropped := w.dropCnt.Swap(0)
 	if dropped > 0 {
-		w.encodeRecord(Record{Wall: w.cfg.Now(), Gap: dropped})
+		// Losing the final gap marker means the tape under-reports its own
+		// holes, which is the one failure this package exists to prevent —
+		// surface it through Close rather than swallowing it.
+		if err := w.encodeRecord(Record{Wall: w.cfg.Now(), Gap: dropped}); err != nil {
+			w.setErr(err)
+		}
 	}
 }
 
@@ -358,11 +365,19 @@ func (w *Writer) encodeRecord(r Record) error {
 	return nil
 }
 
+// flush pushes buffered gzip output to disk so a crash loses at most one
+// flush interval, and so a live capture stays readable while it is running.
 func (w *Writer) flush() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.gzw != nil {
-		w.gzw.Flush()
+	gzw := w.gzw
+	w.mu.Unlock()
+	if gzw == nil {
+		return
+	}
+	// A failing flush means the tape is silently stopping; record it so Close
+	// reports it instead of returning success over a truncated file.
+	if err := gzw.Flush(); err != nil {
+		w.setErr(err)
 	}
 }
 
@@ -456,12 +471,12 @@ func decodeHeader(path string) (Header, error) {
 	if err != nil {
 		return Header{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read path: close error is not actionable
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return Header{}, err
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 	dec := gob.NewDecoder(gzr)
 	var hdr Header
 	if err := dec.Decode(&hdr); err != nil {
@@ -536,7 +551,7 @@ func replayFile(path string, isLast bool, replay *Replay, fn func(Record) error)
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read path: close error is not actionable
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		if isLast && errors.Is(err, gzip.ErrHeader) {
@@ -544,7 +559,7 @@ func replayFile(path string, isLast bool, replay *Replay, fn func(Record) error)
 		}
 		return false, err
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 	dec := gob.NewDecoder(gzr)
 
 	// Decode and validate header.

@@ -84,7 +84,7 @@ func main() {
 	// can ever answer for — a depth-10 BTC book is a couple of BTC. Refuse to
 	// start a long capture at the default depth rather than discover two weeks
 	// later that the tape is too thin to measure anything.
-	var symbols = map[string]string{}
+	symbols := map[string]string{}
 	for _, f := range feeds {
 		switch f.Venue() {
 		case model.Coinbase:
