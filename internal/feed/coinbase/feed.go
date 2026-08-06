@@ -45,6 +45,11 @@ func (f *Feed) RequestResync() {
 func (f *Feed) Run(ctx context.Context, out chan<- model.Event) error {
 	subs := [][]byte{
 		[]byte(fmt.Sprintf(`{"type":"subscribe","product_ids":[%q],"channels":["level2_batch"]}`, f.symbol)),
+		// matches: the public trade tape. The book alone cannot say what
+		// actually traded, so realized VWAP and market impact are unmeasurable
+		// without it. Trade frames carry no book levels and never touch book
+		// state — they exist to be recorded.
+		[]byte(fmt.Sprintf(`{"type":"subscribe","product_ids":[%q],"channels":["matches"]}`, f.symbol)),
 		// heartbeat: liveness only (channels go quiet on low-volume products).
 		[]byte(fmt.Sprintf(`{"type":"subscribe","channels":[{"name":"heartbeat","product_ids":[%q]}]}`, f.symbol)),
 	}

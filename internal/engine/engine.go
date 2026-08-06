@@ -28,13 +28,31 @@ type Engine struct {
 	pub    *snapshot.Publisher
 	books  map[model.Venue]*book.Book
 	resync map[model.Venue]func()
-	depth  int // Kraken truncation depth (subscribed depth)
+	depth  int               // Kraken truncation depth (subscribed depth)
+	sink   func(model.Event) // optional tape recorder; nil when not capturing
+}
+
+// An Option configures an Engine at construction. Options exist so the capture
+// tap could be added without changing New's signature for the benchmark
+// harness and the existing tests.
+type Option func(*Engine)
+
+// WithSink installs a recorder that observes every event Run consumes, in
+// arrival order, BEFORE it is applied — so a replay of the tape drives a fresh
+// engine through exactly the input this one saw.
+//
+// The sink is deliberately wired into Run and not Apply: Apply is also the
+// offline/replay and benchmark entry point, and a sink there would re-record
+// the tape while reading it. fn must not block — it runs on the single-writer
+// goroutine.
+func WithSink(fn func(model.Event)) Option {
+	return func(e *Engine) { e.sink = fn }
 }
 
 // New builds an engine for the given venues. resync maps each venue to its
 // feed's RequestResync (may be nil in offline/test runs). depth is the Kraken
 // subscribed depth (10 in v1).
-func New(pub *snapshot.Publisher, venues []model.Venue, resync map[model.Venue]func(), depth int) *Engine {
+func New(pub *snapshot.Publisher, venues []model.Venue, resync map[model.Venue]func(), depth int, opts ...Option) *Engine {
 	books := make(map[model.Venue]*book.Book, len(venues))
 	for _, v := range venues {
 		books[v] = book.New()
@@ -42,7 +60,26 @@ func New(pub *snapshot.Publisher, venues []model.Venue, resync map[model.Venue]f
 	if resync == nil {
 		resync = map[model.Venue]func(){}
 	}
-	return &Engine{pub: pub, books: books, resync: resync, depth: depth}
+	e := &Engine{pub: pub, books: books, resync: resync, depth: depth}
+	for _, o := range opts {
+		o(e)
+	}
+	return e
+}
+
+// Levels returns the best n levels of one venue's book, best-first, as a fresh
+// slice. The published Snapshot deliberately carries only the top 10 for
+// rendering; the execution-cost study needs the FULL subscribed depth, because
+// the depth it can see is the hard ceiling on the order size it can price.
+//
+// Single-writer discipline is the caller's responsibility: this is for the
+// offline replay path, where the replayer is itself the only writer.
+func (e *Engine) Levels(v model.Venue, s model.Side, n int) []model.Level {
+	bk, ok := e.books[v]
+	if !ok {
+		return nil
+	}
+	return bk.TopN(s, n)
 }
 
 // Run consumes events until ctx is canceled. It must be the ONLY goroutine
@@ -53,6 +90,9 @@ func (e *Engine) Run(ctx context.Context, in <-chan model.Event) {
 		case <-ctx.Done():
 			return
 		case ev := <-in:
+			if e.sink != nil {
+				e.sink(ev) // record the input, then apply it
+			}
 			e.Apply(ev)
 		}
 	}
@@ -62,6 +102,14 @@ func (e *Engine) Run(ctx context.Context, in <-chan model.Event) {
 // offline/replay path and the benchmark harness; single-writer discipline is
 // the caller's responsibility.
 func (e *Engine) Apply(ev model.Event) {
+	// Trades carry no levels and change no book state. Returning here keeps
+	// them out of publish(): a print must not restamp the snapshot or feed
+	// the apply-latency histogram, which measures BOOK maintenance. The tape
+	// still has them — the capture sink runs upstream of Apply.
+	if ev.Kind == model.KindTrade {
+		return
+	}
+
 	bk, ok := e.books[ev.Venue]
 	if !ok {
 		return // event for a venue this engine does not track

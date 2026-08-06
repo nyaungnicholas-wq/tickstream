@@ -63,6 +63,11 @@ type EventKind uint8
 const (
 	KindSnapshot EventKind = iota
 	KindUpdate
+	// KindTrade is an execution print off the venue's public trade channel.
+	// It carries Trades and no book levels: the engine ignores it for book
+	// state, but the tape needs it — realized VWAP and market impact cannot
+	// be measured from the book alone.
+	KindTrade
 )
 
 func (k EventKind) String() string {
@@ -71,6 +76,8 @@ func (k EventKind) String() string {
 		return "snapshot"
 	case KindUpdate:
 		return "update"
+	case KindTrade:
+		return "trade"
 	default:
 		return fmt.Sprintf("EventKind(%d)", uint8(k))
 	}
@@ -202,12 +209,32 @@ type Level struct {
 	QtyStr   string
 }
 
+// Trade is one public execution print, normalized across venues.
+//
+// Aggressor is the side that TOOK liquidity, which the venues report
+// differently and inconsistently: Coinbase Exchange `match.side` is the
+// MAKER's side and must be inverted; Kraken v2 `trade.side` is already the
+// taker's. Normalizing here means downstream code never has to remember
+// which is which. Bid means a buyer lifted the offer.
+type Trade struct {
+	Price     Price
+	Qty       Qty
+	PriceStr  string
+	QtyStr    string
+	Aggressor Side
+	TimeNanos int64
+	ID        string
+}
+
 // Event is a normalized book event from a venue feed.
 type Event struct {
-	Venue          Venue
-	Kind           EventKind
-	Symbol         string
-	Bids, Asks     []Level
+	Venue      Venue
+	Kind       EventKind
+	Symbol     string
+	Bids, Asks []Level
+	// Trades is populated only on KindTrade events; a venue may batch
+	// several prints into one frame.
+	Trades         []Trade
 	Checksum       uint32 // Kraken only; 0 otherwise
 	EventTimeNanos int64  // venue event time if provided, else 0
 	// Received is the monotonic event-received timestamp, stamped by the

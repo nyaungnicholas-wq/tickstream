@@ -47,6 +47,14 @@ func (f *Feed) Run(ctx context.Context, out chan<- model.Event) error {
 			`{"method":"subscribe","params":{"channel":"book","symbol":[%q],"depth":%d,"snapshot":true},"req_id":1}`,
 			f.symbol, f.depth,
 		)),
+		// trade: the public tape. Recorded, never applied to book state — the
+		// book says what is offered, only the tape says what actually traded.
+		// snapshot:false because the backfill of recent prints on subscribe
+		// would land in the capture as if it had just happened.
+		[]byte(fmt.Sprintf(
+			`{"method":"subscribe","params":{"channel":"trade","symbol":[%q],"snapshot":false},"req_id":2}`,
+			f.symbol,
+		)),
 	}
 	onMessage := func(data []byte) error {
 		received := time.Now() // apply-latency clock starts here (§9.1)

@@ -1,5 +1,5 @@
-// Package kraken decodes Kraken WebSocket v2 `book` messages (spec §5.2;
-// M0.5 gate-verified public/no-auth on 2026-07-01).
+// Package kraken decodes Kraken WebSocket v2 public messages: book (spec §5.2)
+// and trade (spec §5.3). M0.5 gate-verified public/no-auth on 2026-07-01.
 //
 // Schema notes:
 //   - price/qty arrive as JSON NUMBERS. The Kraken checksum is computed over
@@ -9,12 +9,18 @@
 //   - qty == 0 => delete. Every snapshot/update carries `checksum` over the
 //     top-10 of each side after applying the message.
 //   - No sequence numbers: on checksum mismatch or disconnect, resync.
+//   - Trade messages batch multiple prints per frame; dropping any would lose
+//     volume, so we emit all trades in the slice.
+//   - Kraken's trade.side is the taker's (aggressor's) side, so it maps
+//     directly with no inversion. This differs from Coinbase Exchange, which
+//     reports the maker side — the asymmetry is the trap.
 package kraken
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nyaungnicholas-wq/tickstream/internal/feed/jsonx"
@@ -22,10 +28,10 @@ import (
 )
 
 type envelope struct {
-	Channel string     `json:"channel"`
-	Type    string     `json:"type"`
-	Method  string     `json:"method"`
-	Data    []bookData `json:"data"`
+	Channel string          `json:"channel"`
+	Type    string          `json:"type"`
+	Method  string          `json:"method"`
+	Data    json.RawMessage `json:"data"`
 }
 
 type bookData struct {
@@ -43,6 +49,15 @@ type rawLevel struct {
 	Qty   json.RawMessage `json:"qty"`
 }
 
+type tradeData struct {
+	Symbol    string          `json:"symbol"`
+	Side      string          `json:"side"`
+	Price     json.RawMessage `json:"price"`
+	Qty       json.RawMessage `json:"qty"`
+	TradeID   int64           `json:"trade_id"`
+	Timestamp string          `json:"timestamp"`
+}
+
 // DecodeMessage decodes one raw frame. ok is false for frames we deliberately
 // ignore (subscribe acks, heartbeat, status, pong).
 func DecodeMessage(data []byte) (model.Event, bool, error) {
@@ -50,10 +65,19 @@ func DecodeMessage(data []byte) (model.Event, bool, error) {
 	if err := jsonx.Unmarshal(data, &env); err != nil {
 		return model.Event{}, false, fmt.Errorf("kraken: decode envelope: %w", err)
 	}
-	if env.Channel != "book" {
+
+	switch env.Channel {
+	case "book":
+		return decodeBook(env)
+	case "trade":
+		return decodeTrade(env)
+	default:
 		// heartbeat/status channels, method acks (subscribe/pong), etc.
 		return model.Event{}, false, nil
 	}
+}
+
+func decodeBook(env envelope) (model.Event, bool, error) {
 	var kind model.EventKind
 	switch env.Type {
 	case "snapshot":
@@ -63,10 +87,14 @@ func DecodeMessage(data []byte) (model.Event, bool, error) {
 	default:
 		return model.Event{}, false, nil
 	}
-	if len(env.Data) == 0 {
+	var data []bookData
+	if err := jsonx.Unmarshal(env.Data, &data); err != nil {
+		return model.Event{}, false, fmt.Errorf("kraken: decode book data: %w", err)
+	}
+	if len(data) == 0 {
 		return model.Event{}, false, fmt.Errorf("kraken: %s frame with empty data", env.Type)
 	}
-	d := env.Data[0]
+	d := data[0]
 	ev := model.Event{
 		Venue:          model.Kraken,
 		Kind:           kind,
@@ -80,6 +108,62 @@ func DecodeMessage(data []byte) (model.Event, bool, error) {
 	}
 	if ev.Asks, err = levels(d.Asks); err != nil {
 		return model.Event{}, false, fmt.Errorf("kraken %s asks: %w", env.Type, err)
+	}
+	return ev, true, nil
+}
+
+func decodeTrade(env envelope) (model.Event, bool, error) {
+	switch env.Type {
+	case "snapshot", "update":
+		// proceed
+	default:
+		return model.Event{}, false, nil
+	}
+	var data []tradeData
+	if err := jsonx.Unmarshal(env.Data, &data); err != nil {
+		return model.Event{}, false, fmt.Errorf("kraken: decode trade data: %w", err)
+	}
+	if len(data) == 0 {
+		return model.Event{}, false, fmt.Errorf("kraken: trade frame with empty data")
+	}
+	// Batched trades; all share the same symbol and timestamp.
+	d := data[0]
+	ev := model.Event{
+		Venue:          model.Kraken,
+		Kind:           model.KindTrade,
+		Symbol:         d.Symbol,
+		EventTimeNanos: parseTimeNanos(d.Timestamp),
+		Trades:         make([]model.Trade, 0, len(data)),
+	}
+	for _, t := range data {
+		priceStr := string(bytes.TrimSpace(t.Price))
+		qtyStr := string(bytes.TrimSpace(t.Qty))
+		price, err := model.PriceFromString(priceStr)
+		if err != nil {
+			return model.Event{}, false, fmt.Errorf("kraken trade price: %w", err)
+		}
+		qty, err := model.QtyFromString(qtyStr)
+		if err != nil {
+			return model.Event{}, false, fmt.Errorf("kraken trade qty: %w", err)
+		}
+		var aggressor model.Side
+		switch t.Side {
+		case "buy":
+			aggressor = model.Bid
+		case "sell":
+			aggressor = model.Ask
+		default:
+			return model.Event{}, false, fmt.Errorf("kraken trade: unknown side %q", t.Side)
+		}
+		ev.Trades = append(ev.Trades, model.Trade{
+			Price:     price,
+			Qty:       qty,
+			PriceStr:  priceStr,
+			QtyStr:    qtyStr,
+			Aggressor: aggressor,
+			TimeNanos: parseTimeNanos(t.Timestamp),
+			ID:        strconv.FormatInt(t.TradeID, 10),
+		})
 	}
 	return ev, true, nil
 }

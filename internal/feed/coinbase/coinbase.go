@@ -1,16 +1,19 @@
 // Package coinbase decodes Coinbase EXCHANGE `level2_batch` messages
 // (spec §5.1; M0.5 gate-verified public/no-auth on 2026-07-01).
+// It also decodes `match`/`last_match` trade frames.
 //
 // Schema notes (Exchange product — NOT Advanced Trade):
 //   - "snapshot": bids/asks are [price, size] string tuples.
 //   - "l2update": changes are [side, price, size] string tuples where side is
 //     "buy"/"sell" and size is the NEW ABSOLUTE size ("0" = delete).
+//   - "match"/"last_match": trade events where side is the MAKER side (not taker).
 //   - No per-message sequence number on level2; TCP order + heartbeat
 //     liveness (spec §6.3).
 package coinbase
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nyaungnicholas-wq/tickstream/internal/feed/jsonx"
@@ -24,6 +27,10 @@ type envelope struct {
 	Bids      [][]string `json:"bids"`
 	Asks      [][]string `json:"asks"`
 	Changes   [][]string `json:"changes"`
+	Side      string     `json:"side"`
+	Size      string     `json:"size"`
+	Price     string     `json:"price"`
+	TradeID   int64      `json:"trade_id"`
 }
 
 // DecodeMessage decodes one raw frame. ok is false for frames we deliberately
@@ -73,6 +80,58 @@ func DecodeMessage(data []byte) (model.Event, bool, error) {
 			default:
 				return model.Event{}, false, fmt.Errorf("coinbase l2update: unknown side %q", ch[0])
 			}
+		}
+		return ev, true, nil
+
+	case "match", "last_match":
+		if env.Size == "" {
+			return model.Event{}, false, fmt.Errorf("coinbase match: empty size")
+		}
+		if env.Price == "" {
+			return model.Event{}, false, fmt.Errorf("coinbase match: empty price")
+		}
+
+		// Coinbase reports the side of the MAKER order (the resting order
+		// that was hit), not the taker. Kraken v2 reports the taker side;
+		// only Coinbase is inverted. The aggressor is therefore the
+		// OPPOSITE side.
+		var aggressor model.Side
+		switch env.Side {
+		case "sell":
+			// A resting sell was lifted, so the taker bought.
+			aggressor = model.Bid
+		case "buy":
+			// A resting buy was hit, so the taker sold.
+			aggressor = model.Ask
+		default:
+			return model.Event{}, false, fmt.Errorf("coinbase match: unknown side %q", env.Side)
+		}
+
+		p, err := model.PriceFromString(env.Price)
+		if err != nil {
+			return model.Event{}, false, fmt.Errorf("coinbase match: %w", err)
+		}
+		q, err := model.QtyFromString(env.Size)
+		if err != nil {
+			return model.Event{}, false, fmt.Errorf("coinbase match: %w", err)
+		}
+
+		ev := model.Event{
+			Venue:          model.Coinbase,
+			Kind:           model.KindTrade,
+			Symbol:         env.ProductID,
+			EventTimeNanos: parseTimeNanos(env.Time),
+			Trades: []model.Trade{
+				{
+					Price:     p,
+					Qty:       q,
+					PriceStr:  env.Price,
+					QtyStr:    env.Size,
+					Aggressor: aggressor,
+					TimeNanos: parseTimeNanos(env.Time),
+					ID:        strconv.FormatInt(env.TradeID, 10),
+				},
+			},
 		}
 		return ev, true, nil
 
