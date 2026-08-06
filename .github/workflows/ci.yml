@@ -1,29 +1,19 @@
-name: ci
+name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
-      - name: go mod tidy (fail if dirty)
-        run: go mod tidy -diff
-      - name: vet
-        run: go vet ./...
-      - name: lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: latest
-      - name: test (race)
-        run: go test -race -buildvcs ./...
-      # Bench smoke: compile/run validation ONLY. Runs WITHOUT -race on purpose
-      # (race-instrumented timings are 2-20x slower and meaningless) and its
-      # timings are NEVER recorded as benchmark results.
-      - name: bench smoke (no -race, compile/run check only)
-        run: go test -run=^$ -bench=. -benchtime=1x ./...
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...

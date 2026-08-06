@@ -96,6 +96,14 @@ make test         # unit + concurrency tests, with -race
 make bench-e2e    # the honest apply-latency harness (+ latency.csv)
 ```
 
+**Windows (no make):**
+
+```powershell
+go build ./...
+go test ./...
+go run ./cmd/tickstreamd   # equivalent of `make run`
+```
+
 Sample live output:
 
 ```
